@@ -1,5 +1,5 @@
-# demo
-极海Channel演示代码  <br>
+# 说明
+极海 演示代码 <br>
 
 # 捐赠
 ![image](https://user-images.githubusercontent.com/98442707/170631866-1fcf7612-f6e9-46b4-87f1-95595d171bb4.png)
