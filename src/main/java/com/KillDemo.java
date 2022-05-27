@@ -111,11 +111,11 @@ public class KillDemo {
                     if (count <= stock) {
                         stock -= count;
                         requestPromise.setResult(new Result(true, "ok"));
-                        synchronized (requestPromise) {
-                            requestPromise.notify();
-                        }
                     } else {
                         requestPromise.setResult(new Result(false, "库存不足"));
+                    }
+                    synchronized (requestPromise) {
+                        requestPromise.notify();
                     }
                 }
                 list.clear();
