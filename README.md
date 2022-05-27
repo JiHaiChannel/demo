@@ -1,5 +1,5 @@
 # demo
-极海Channel演示代码
+极海Channel演示代码  <br>
 # 捐赠
 🌟 扫码支付：<br>
 ![Pay](img/PaymentCode.jpeg)
