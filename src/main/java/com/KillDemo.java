@@ -64,8 +64,11 @@ public class KillDemo {
         synchronized (requestPromise) {
             try {
                 requestPromise.wait(200);
+                if (requestPromise.getResult() == null) {
+                    return new Result(false, "等待超时");
+                }
             } catch (InterruptedException e) {
-                return new Result(false, "等待超时");
+                return new Result(false, "被中断");
             }
         }
         return requestPromise.getResult();
