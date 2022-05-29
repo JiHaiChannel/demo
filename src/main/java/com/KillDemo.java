@@ -104,6 +104,7 @@ public class KillDemo {
                             requestPromise.notify();
                         }
                     });
+                    list.clear();
                     continue;
                 }
                 for (RequestPromise requestPromise : list) {
