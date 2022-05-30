@@ -29,6 +29,7 @@ public class KillDemo {
             final Long userId = Long.valueOf(i);
             Future<Result> future = executorService.submit(() -> {
                 countDownLatch.countDown();
+                countDownLatch.await(1000, TimeUnit.SECONDS);
                 return killDemo.operate(new UserRequest(orderId, userId, 1));
             });
             futureList.add(future);
@@ -57,15 +58,18 @@ public class KillDemo {
         // TODO 阈值判断
         // TODO 队列的创建
         RequestPromise requestPromise = new RequestPromise(userRequest);
-        boolean enqueueSuccess = queue.offer(requestPromise, 100, TimeUnit.MILLISECONDS);
-        if (! enqueueSuccess) {
-            return new Result(false, "系统繁忙");
-        }
         synchronized (requestPromise) {
+            boolean enqueueSuccess = queue.offer(requestPromise, 100, TimeUnit.MILLISECONDS);
+            if (! enqueueSuccess) {
+                return new Result(false, "系统繁忙");
+            }
             try {
                 requestPromise.wait(200);
+                if (requestPromise.getResult() == null) {
+                    return new Result(false, "等待超时");
+                }
             } catch (InterruptedException e) {
-                return new Result(false, "等待超时");
+                e.printStackTrace();
             }
         }
         return requestPromise.getResult();
@@ -84,7 +88,8 @@ public class KillDemo {
                     }
                 }
 
-                while (queue.peek() != null) {
+                int batchSize = queue.size();
+                for (int i = 0; i < batchSize; i++) {
                     list.add(queue.poll());
                 }
 
@@ -101,6 +106,7 @@ public class KillDemo {
                             requestPromise.notify();
                         }
                     });
+                    list.clear();
                     continue;
                 }
                 for (RequestPromise requestPromise : list) {
@@ -108,11 +114,11 @@ public class KillDemo {
                     if (count <= stock) {
                         stock -= count;
                         requestPromise.setResult(new Result(true, "ok"));
-                        synchronized (requestPromise) {
-                            requestPromise.notify();
-                        }
                     } else {
                         requestPromise.setResult(new Result(false, "库存不足"));
+                    }
+                    synchronized (requestPromise) {
+                        requestPromise.notify();
                     }
                 }
                 list.clear();
