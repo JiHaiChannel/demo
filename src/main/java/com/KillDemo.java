@@ -69,7 +69,7 @@ public class KillDemo {
                     return new Result(false, "等待超时");
                 }
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                return new Result(false, "被中断");
             }
         }
         return requestPromise.getResult();
