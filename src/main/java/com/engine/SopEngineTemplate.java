@@ -38,11 +38,11 @@ public class SopEngineTemplate {
                 }
             }
 
-            // 开启事务
+            // TODO 开启事务
             for (Component component : componentList) {
                 component.doTransaction(context);
             }
-            // 结束事务
+            // TODO 结束事务
         } catch (Exception exception) {
             result = (RESULT) Result.fail("execute error");
         }
