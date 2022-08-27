@@ -1,8 +1,10 @@
 package com;
 
-import java.util.ArrayList;
-import java.util.List;
+import com.google.common.collect.Lists;
+
+import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 /**
  * @Author:jihai
@@ -11,9 +13,9 @@ import java.util.concurrent.*;
  */
 public class KillDemo {
     /**
-     * 启动10个线程
+     * 启动10个用户线程
      * 库存6个
-     * 生成一个合并队列
+     * 生成一个合并队列，3个用户一批次
      * 每个用户能拿到自己的请求响应
      */
     public static void main(String[] args) throws InterruptedException {
@@ -22,31 +24,76 @@ public class KillDemo {
         killDemo.mergeJob();
         Thread.sleep(2000);
 
-        List<Future<Result>> futureList = new ArrayList<>();
         CountDownLatch countDownLatch = new CountDownLatch(10);
+
+        System.out.println("-------- 库存 --------");
+        System.out.println("库存初始数量 :" + killDemo.stock);
+
+        Map<UserRequest, Future<Result>> requestFutureMap = new HashMap<>();
         for (int i = 0; i < 10; i++) {
             final Long orderId = i + 100L;
             final Long userId = Long.valueOf(i);
+            UserRequest userRequest = new UserRequest(orderId, userId, 1);
             Future<Result> future = executorService.submit(() -> {
                 countDownLatch.countDown();
-                countDownLatch.await(1000, TimeUnit.SECONDS);
-                return killDemo.operate(new UserRequest(orderId, userId, 1));
+                countDownLatch.await(1, TimeUnit.SECONDS);
+                return killDemo.operate(userRequest);
             });
-            futureList.add(future);
+
+            requestFutureMap.put(userRequest, future);
         }
 
-        futureList.forEach(future -> {
+        System.out.println("------- 客户端响应 -------");
+        Thread.sleep(1000);
+        requestFutureMap.entrySet().forEach(entry -> {
             try {
-                Result result = future.get(300, TimeUnit.MILLISECONDS);
+                Result result = entry.getValue().get(300, TimeUnit.MILLISECONDS);
                 System.out.println(Thread.currentThread().getName() + ":客户端请求响应:" + result);
+
+                if (! result.isSuccess() && result.getMsg().equals("等待超时")) {
+                    // 超时，发送请求回滚
+                    System.out.println(entry.getKey() + " 发起回滚操作");
+                    killDemo.rollback(entry.getKey());
+                }
             } catch (Exception e) {
                 e.printStackTrace();
             }
         });
+
+        System.out.println("------- 库存操作日志 -------");
+        System.out.println("扣减成功条数: " + killDemo.operateChangeLogList.stream().filter(e -> e.getOperateType().equals(1)).count());
+        killDemo.operateChangeLogList.forEach(e -> {
+            if (e.getOperateType().equals(1)) {
+                System.out.println(e);
+            }
+        });
+
+        System.out.println("扣减回滚条数: " + killDemo.operateChangeLogList.stream().filter(e -> e.getOperateType().equals(2)).count());
+        killDemo.operateChangeLogList.forEach(e -> {
+            if (e.getOperateType().equals(2)) {
+                System.out.println(e);
+            }
+        });
+
+        System.out.println("-------- 库存 --------");
+        System.out.println("库存初始数量 :" + killDemo.stock);
+
+    }
+
+    private void rollback(UserRequest userRequest) {
+        if (operateChangeLogList.stream().anyMatch(operateChangeLog -> operateChangeLog.getOrderId().equals(userRequest.getOrderId()))) {
+            // 回滚
+            boolean hasRollback = operateChangeLogList.stream().anyMatch(operateChangeLog -> operateChangeLog.getOrderId().equals(userRequest.getOrderId()) && operateChangeLog.getOperateType().equals(2));
+            if (hasRollback) return ;
+            System.out.println(" 最终回滚");
+            stock += userRequest.getCount();
+            saveChangeLog(Lists.newArrayList(userRequest), 2);
+        }
+        // 忽略
     }
 
     // 模拟数据库行
-    private Integer stock = 10;
+    private Integer stock = 6;
 
     private BlockingQueue<RequestPromise> queue = new LinkedBlockingQueue<>(10);
     /**
@@ -88,9 +135,22 @@ public class KillDemo {
                     }
                 }
 
-                int batchSize = queue.size();
+                int batchSize = 3;
                 for (int i = 0; i < batchSize; i++) {
-                    list.add(queue.poll());
+                    try {
+                        list.add(queue.take());
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+
+                // 用户ID=5的批次和之后的批次，请求都会超时
+                if (list.stream().anyMatch(e -> e.getUserRequest().getUserId().equals(5L))) {
+                    try {
+                        Thread.sleep(200);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
                 }
 
                 System.out.println(Thread.currentThread().getName() + ":合并扣减库存:" + list);
@@ -98,7 +158,10 @@ public class KillDemo {
                 int sum = list.stream().mapToInt(e -> e.getUserRequest().getCount()).sum();
                 // 两种情况
                 if (sum <= stock) {
+                    // 开始事务
                     stock -= sum;
+                    saveChangeLog(list.stream().map(RequestPromise::getUserRequest).collect(Collectors.toList()), 1);
+                    // 关闭事务
                     // notify user
                     list.forEach(requestPromise -> {
                         requestPromise.setResult(new Result(true, "ok"));
@@ -112,7 +175,10 @@ public class KillDemo {
                 for (RequestPromise requestPromise : list) {
                     int count = requestPromise.getUserRequest().getCount();
                     if (count <= stock) {
+                        // 开启事务
                         stock -= count;
+                        saveChangeLog(Lists.newArrayList(requestPromise.getUserRequest()), 1);
+                        // 关闭事务
                         requestPromise.setResult(new Result(true, "ok"));
                     } else {
                         requestPromise.setResult(new Result(false, "库存不足"));
@@ -124,6 +190,66 @@ public class KillDemo {
                 list.clear();
             }
         }, "mergeThread").start();
+    }
+
+    // 模拟数据库操作日志表
+    // order_id_operate_type uk
+    private List<OperateChangeLog> operateChangeLogList = new ArrayList<>();
+
+    /**
+     * 写库存流水
+     * @param list
+     * @param operateType
+     */
+    private void saveChangeLog(List<UserRequest> list, int operateType) {
+        List<OperateChangeLog> collect = list.stream().map(userRequest -> new OperateChangeLog(userRequest.getOrderId(),
+                userRequest.getCount(), operateType)).collect(Collectors.toList());
+        operateChangeLogList.addAll(collect);
+    }
+}
+class OperateChangeLog {
+    private Long orderId;
+    private Integer count;
+    // 1-扣减，2-回滚
+    private Integer operateType;
+
+    public OperateChangeLog(Long orderId, Integer count, Integer operateType) {
+        this.orderId = orderId;
+        this.count = count;
+        this.operateType = operateType;
+    }
+
+    public Long getOrderId() {
+        return orderId;
+    }
+
+    public void setOrderId(Long orderId) {
+        this.orderId = orderId;
+    }
+
+    public Integer getCount() {
+        return count;
+    }
+
+    public void setCount(Integer count) {
+        this.count = count;
+    }
+
+    public Integer getOperateType() {
+        return operateType;
+    }
+
+    public void setOperateType(Integer operateType) {
+        this.operateType = operateType;
+    }
+
+    @Override
+    public String toString() {
+        return "OperateChangeLog{" +
+                "orderId=" + orderId +
+                ", count=" + count +
+                ", operateType=" + operateType +
+                '}';
     }
 }
 class RequestPromise {
